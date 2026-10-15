@@ -1,0 +1,70 @@
+{
+  "name": "mienflayer",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      }
+    },
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "Workspace": {
+      "Baseplate": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            512,
+            2,
+            512
+          ],
+          "Position": [
+            0,
+            -1,
+            0
+          ],
+          "Color": [
+            0.35,
+            0.55,
+            0.3
+          ],
+          "Material": "Grass",
+          "TopSurface": "Smooth",
+          "BottomSurface": "Smooth"
+        }
+      },
+      "SpawnLocation": {
+        "$className": "SpawnLocation",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            12,
+            1,
+            12
+          ],
+          "Position": [
+            0,
+            0.5,
+            0
+          ]
+        }
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "ClockTime": 14
+      }
+    }
+  }
+}

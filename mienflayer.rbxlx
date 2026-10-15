@@ -1,0 +1,442 @@
+<roblox version="4">
+  <Item class="Lighting" referent="0">
+    <Properties>
+      <string name="Name">Lighting</string>
+      <float name="ClockTime">14</float>
+    </Properties>
+  </Item>
+  <Item class="ReplicatedStorage" referent="1">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="2">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+      <Item class="ModuleScript" referent="3">
+        <Properties>
+          <string name="Name">Config</string>
+          <string name="Source"><![CDATA[--!strict
+-- 철도 데모 설정값
+-- 길이 단위 환산: Roblox 공식 문서 기준 1 stud = 0.28 m
+-- (https://create.roblox.com/docs/physics/units)
+
+local STUD_PER_METER = 1 / 0.28
+
+local Config = {
+	-- 선로
+	TrackCenter = Vector3.new(0, 0, 0),
+	TrackRadius = 150, -- studs (약 42 m)
+	TrackSegments = 96,
+	-- 표준궤간 1,435 mm (국토교통부 「철도의 건설기준에 관한 규정」, UIC 표준)
+	Gauge = 1.435 * STUD_PER_METER, -- 약 5.1 studs
+	RailHeight = 0.6,
+	SleeperSpacing = 2, -- 선로 1분할당 침목 개수
+
+	-- 차량
+	CarLength = 24,
+	CarWidth = 10,
+	CarHeight = 9,
+	CarCount = 3,
+	CarGap = 1.5,
+
+	-- 운전 (studs/s, studs/s²)
+	MaxSpeed = 60,
+	Acceleration = 6,
+	BrakeDeceleration = 10,
+	CoastDeceleration = 0.8, -- 주행저항에 의한 자연 감속
+
+	RemoteName = "TrainThrottle",
+	TrainName = "DemoTrain",
+}
+
+return Config
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="4">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Folder" referent="5">
+      <Properties>
+        <string name="Name">Server</string>
+      </Properties>
+      <Item class="Script" referent="6">
+        <Properties>
+          <string name="Name">Main</string>
+          <token name="RunContext">0</token>
+          <string name="Source"><![CDATA[--!strict
+local TrainService = require(script.Parent.TrainService)
+
+TrainService.start()
+print("[mienflayer] 철도 데모 시작: 열차 선두차 지붕의 운전석에 앉으세요.")
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="7">
+        <Properties>
+          <string name="Name">TrackBuilder</string>
+          <string name="Source"><![CDATA[--!strict
+-- 원형 선로(레일 + 침목)를 생성합니다.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Config = require(ReplicatedStorage.Shared.Config)
+
+local TrackBuilder = {}
+
+local function makePart(name: string, size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material): Part
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = material
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	return part
+end
+
+-- 각도 theta에서의 선로 중심 CFrame (진행방향 = theta 증가 방향)
+function TrackBuilder.cframeAt(theta: number, height: number): CFrame
+	local r = Config.TrackRadius
+	local pos = Config.TrackCenter + Vector3.new(math.cos(theta) * r, height, math.sin(theta) * r)
+	local tangent = Vector3.new(-math.sin(theta), 0, math.cos(theta))
+	return CFrame.lookAt(pos, pos + tangent)
+end
+
+function TrackBuilder.build(parent: Instance): Model
+	local model = Instance.new("Model")
+	model.Name = "Track"
+
+	local n = Config.TrackSegments
+	local step = 2 * math.pi / n
+	local r = Config.TrackRadius
+	local chord = 2 * r * math.sin(step / 2)
+	local railColor = Color3.fromRGB(120, 120, 125)
+	local sleeperColor = Color3.fromRGB(90, 70, 50)
+
+	for i = 0, n - 1 do
+		local theta = (i + 0.5) * step
+		local center = TrackBuilder.cframeAt(theta, 0)
+
+		-- 좌우 레일: 선로 중심에서 궤간/2 만큼 좌우로
+		for _, side in { -1, 1 } do
+			local offset = center * CFrame.new(side * Config.Gauge / 2, Config.RailHeight / 2 + 0.4, 0)
+			local rail = makePart(
+				"Rail",
+				Vector3.new(0.4, Config.RailHeight, chord + 0.1),
+				offset,
+				railColor,
+				Enum.Material.Metal
+			)
+			rail.Parent = model
+		end
+
+		-- 침목
+		for s = 0, Config.SleeperSpacing - 1 do
+			local t = i * step + (s + 0.5) * step / Config.SleeperSpacing
+			local sleeper = makePart(
+				"Sleeper",
+				Vector3.new(Config.Gauge + 3, 0.4, 1),
+				TrackBuilder.cframeAt(t, 0.2),
+				sleeperColor,
+				Enum.Material.Wood
+			)
+			sleeper.Parent = model
+		end
+	end
+
+	model.Parent = parent
+	return model
+end
+
+return TrackBuilder
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="8">
+        <Properties>
+          <string name="Name">TrainService</string>
+          <string name="Source"><![CDATA[--!strict
+-- 열차 생성 및 운전 시뮬레이션 (서버 권한)
+-- 플레이어는 RemoteEvent로 노치(-1 제동, 0 타행, 1 역행)만 보냅니다.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+local TrackBuilder = require(script.Parent.TrackBuilder)
+
+local TrainService = {}
+
+type Car = { model: Model, offset: number }
+
+local cars: { Car } = {}
+local theta = 0 -- 선두차 위치 (rad)
+local speed = 0 -- studs/s
+local notch = 0
+local driver: Player? = nil
+
+local function buildCar(index: number): Model
+	local car = Instance.new("Model")
+	car.Name = "Car" .. index
+
+	local body = Instance.new("Part")
+	body.Name = "Body"
+	body.Anchored = true
+	body.CanCollide = true
+	body.Size = Vector3.new(Config.CarWidth, Config.CarHeight, Config.CarLength)
+	body.Color = index == 1 and Color3.fromRGB(0, 90, 170) or Color3.fromRGB(230, 230, 235)
+	body.Material = Enum.Material.SmoothPlastic
+	body.Parent = car
+	car.PrimaryPart = body
+
+	local stripe = Instance.new("Part")
+	stripe.Name = "Stripe"
+	stripe.Anchored = true
+	stripe.CanCollide = false
+	stripe.Size = Vector3.new(Config.CarWidth + 0.1, 1, Config.CarLength + 0.1)
+	stripe.Color = Color3.fromRGB(0, 150, 220)
+	stripe.Material = Enum.Material.Neon
+	stripe.CFrame = body.CFrame * CFrame.new(0, -1.5, 0)
+	stripe.Parent = car
+
+	if index == 1 then
+		local seat = Instance.new("Seat")
+		seat.Name = "DriverSeat"
+		seat.Anchored = true
+		seat.Size = Vector3.new(2, 1, 2)
+		seat.CFrame = body.CFrame * CFrame.new(0, Config.CarHeight / 2 + 0.5, -Config.CarLength / 2 + 3)
+		seat.Parent = car
+	end
+
+	return car
+end
+
+local function placeCars()
+	local r = Config.TrackRadius
+	local height = 0.8 + Config.RailHeight + Config.CarHeight / 2
+	for _, car in cars do
+		local t = theta - car.offset / r
+		car.model:PivotTo(TrackBuilder.cframeAt(t, height))
+	end
+end
+
+local function step(dt: number)
+	if notch > 0 then
+		speed += Config.Acceleration * dt
+	elseif notch < 0 then
+		speed -= Config.BrakeDeceleration * dt
+	else
+		speed -= Config.CoastDeceleration * dt
+	end
+	speed = math.clamp(speed, 0, Config.MaxSpeed)
+
+	theta = (theta + speed / Config.TrackRadius * dt) % (2 * math.pi)
+	placeCars()
+
+	local train = workspace:FindFirstChild(Config.TrainName)
+	if train then
+		-- 클라이언트 표시용 (km/h 환산: 1 stud = 0.28 m)
+		train:SetAttribute("SpeedKmh", math.floor(speed * 0.28 * 3.6 + 0.5))
+		train:SetAttribute("Notch", notch)
+	end
+end
+
+function TrainService.start()
+	TrackBuilder.build(workspace)
+
+	local train = Instance.new("Model")
+	train.Name = Config.TrainName
+	for i = 1, Config.CarCount do
+		local model = buildCar(i)
+		model.Parent = train
+		table.insert(cars, { model = model, offset = (i - 1) * (Config.CarLength + Config.CarGap) })
+	end
+	train.Parent = workspace
+	placeCars()
+
+	local remote = Instance.new("RemoteEvent")
+	remote.Name = Config.RemoteName
+	remote.Parent = ReplicatedStorage
+
+	-- 운전석에 앉은 플레이어만 운전 가능
+	local seat = cars[1].model:FindFirstChild("DriverSeat") :: Seat
+	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
+		local humanoid = seat.Occupant
+		driver = if humanoid then Players:GetPlayerFromCharacter(humanoid.Parent) else nil
+		if not driver then
+			notch = 0
+		end
+	end)
+
+	remote.OnServerEvent:Connect(function(player: Player, value: unknown)
+		if player ~= driver or typeof(value) ~= "number" then
+			return
+		end
+		notch = math.clamp(math.round(value), -1, 1)
+	end)
+
+	RunService.Heartbeat:Connect(step)
+end
+
+return TrainService
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="StarterPlayer" referent="9">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="10">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="Folder" referent="11">
+        <Properties>
+          <string name="Name">Client</string>
+        </Properties>
+        <Item class="LocalScript" referent="12">
+          <Properties>
+            <string name="Name">TrainUI</string>
+            <string name="Source"><![CDATA[--!strict
+-- 운전 UI: W = 역행(가속), S = 제동, 아무 키도 안 누르면 타행
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local Config = require(ReplicatedStorage.Shared.Config)
+
+local player = Players.LocalPlayer
+local remote = ReplicatedStorage:WaitForChild(Config.RemoteName) :: RemoteEvent
+local train = workspace:WaitForChild(Config.TrainName)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "TrainHUD"
+gui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame")
+frame.AnchorPoint = Vector2.new(0.5, 1)
+frame.Position = UDim2.new(0.5, 0, 1, -20)
+frame.Size = UDim2.fromOffset(320, 110)
+frame.BackgroundColor3 = Color3.fromRGB(20, 24, 30)
+frame.BackgroundTransparency = 0.2
+frame.Parent = gui
+Instance.new("UICorner").Parent = frame
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.new(1, 0, 0, 50)
+label.BackgroundTransparency = 1
+label.TextColor3 = Color3.new(1, 1, 1)
+label.Font = Enum.Font.GothamBold
+label.TextSize = 28
+label.Text = "0 km/h"
+label.Parent = frame
+
+local function makeButton(text: string, x: number, value: number)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.fromOffset(96, 40)
+	button.Position = UDim2.fromOffset(x, 60)
+	button.Text = text
+	button.Font = Enum.Font.GothamMedium
+	button.TextSize = 16
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.BackgroundColor3 = Color3.fromRGB(50, 60, 75)
+	button.Parent = frame
+	Instance.new("UICorner").Parent = button
+	button.Activated:Connect(function()
+		remote:FireServer(value)
+	end)
+end
+
+makeButton("제동 (S)", 10, -1)
+makeButton("타행", 112, 0)
+makeButton("역행 (W)", 214, 1)
+
+local notchText = { [-1] = "제동", [0] = "타행", [1] = "역행" }
+local function refresh()
+	local kmh = train:GetAttribute("SpeedKmh") or 0
+	local notch = train:GetAttribute("Notch") or 0
+	label.Text = string.format("%d km/h  ·  %s", kmh, notchText[notch] or "")
+end
+train:GetAttributeChangedSignal("SpeedKmh"):Connect(refresh)
+train:GetAttributeChangedSignal("Notch"):Connect(refresh)
+
+local function currentNotch(): number
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+		return -1
+	elseif UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		return 1
+	end
+	return 0
+end
+
+local function onKey(input: InputObject, processed: boolean)
+	if processed then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.W or input.KeyCode == Enum.KeyCode.S then
+		remote:FireServer(currentNotch())
+	end
+end
+UserInputService.InputBegan:Connect(onKey)
+UserInputService.InputEnded:Connect(onKey)
+
+gui.Parent = player:WaitForChild("PlayerGui")
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="Workspace" referent="13">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <bool name="NeedsPivotMigration">false</bool>
+    </Properties>
+    <Item class="Part" referent="14">
+      <Properties>
+        <string name="Name">Baseplate</string>
+        <bool name="Anchored">true</bool>
+        <token name="BottomSurface">0</token>
+        <Color3uint8 name="Color3uint8">5868621</Color3uint8>
+        <token name="Material">1280</token>
+        <Vector3 name="Position">
+          <X>0</X>
+          <Y>-1</Y>
+          <Z>0</Z>
+        </Vector3>
+        <Vector3 name="size">
+          <X>512</X>
+          <Y>2</Y>
+          <Z>512</Z>
+        </Vector3>
+        <token name="TopSurface">0</token>
+      </Properties>
+    </Item>
+    <Item class="SpawnLocation" referent="15">
+      <Properties>
+        <string name="Name">SpawnLocation</string>
+        <bool name="Anchored">true</bool>
+        <Vector3 name="Position">
+          <X>0</X>
+          <Y>0.5</Y>
+          <Z>0</Z>
+        </Vector3>
+        <Vector3 name="size">
+          <X>12</X>
+          <Y>1</Y>
+          <Z>12</Z>
+        </Vector3>
+      </Properties>
+    </Item>
+  </Item>
+</roblox>
